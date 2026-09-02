@@ -1,0 +1,105 @@
+{
+  "dataset": "tgs_talk_to_data",
+  "description": "Sales/order data for the Talk-to-my-data PoC, stored as managed Delta tables in Azure Databricks under catalog tgs_talk_to_my_data, schema tgs_talk_to_data. customer_state is used as the location dimension (proxy for TGS's store/country dimension) since the source dataset is a single-country online marketplace.",
+  "tables": [
+    {
+      "name": "orders",
+      "description": "One row per order. Anchor table for the whole schema. 99,441 rows.",
+      "primary_key": "order_id",
+      "columns": {
+        "order_id": "unique order identifier",
+        "customer_id": "FK -> customers.customer_id",
+        "order_status": "delivered, shipped, canceled, unavailable, etc.",
+        "order_purchase_timestamp": "when the order was placed - use this for time-based aggregations",
+        "order_delivered_customer_date": "when the customer received the order"
+      }
+    },
+    {
+      "name": "customers",
+      "description": "One row per customer, with location. 99,441 rows.",
+      "primary_key": "customer_id",
+      "columns": {
+        "customer_id": "unique per order (note: same real person may have multiple customer_id values)",
+        "customer_unique_id": "stable identifier for the same real person across orders",
+        "customer_city": "city name",
+        "customer_state": "2-letter Brazilian state code - use this for 'by country/region/store' style questions"
+      }
+    },
+    {
+      "name": "order_items",
+      "description": "One row per line item within an order. This is where price and quantity live - use this table for any revenue or units-sold calculation. 112,650 rows.",
+      "primary_key": "order_id + order_item_id",
+      "columns": {
+        "order_id": "FK -> orders.order_id",
+        "order_item_id": "line number within the order",
+        "product_id": "FK -> products.product_id",
+        "seller_id": "FK -> sellers.seller_id",
+        "price": "item price in BRL - use SUM(price) for revenue",
+        "freight_value": "shipping cost - NOT part of revenue"
+      }
+    },
+    {
+      "name": "products",
+      "description": "One row per product. 32,951 rows.",
+      "primary_key": "product_id",
+      "columns": {
+        "product_id": "unique product identifier",
+        "product_category_name": "category name in Portuguese - join to category_translation for English"
+      }
+    },
+    {
+      "name": "category_translation",
+      "description": "Lookup table translating Portuguese category names to English. 71 rows.",
+      "primary_key": "product_category_name",
+      "columns": {
+        "product_category_name": "FK -> products.product_category_name",
+        "product_category_name_english": "human-readable English category name"
+      }
+    },
+    {
+      "name": "order_payments",
+      "description": "Payment method and installment info. A single order can have multiple rows (installments) - do not use this table for revenue, use order_items.price instead. 103,886 rows.",
+      "primary_key": "order_id + payment_sequential",
+      "columns": {
+        "order_id": "FK -> orders.order_id",
+        "payment_type": "credit_card, boleto, voucher, etc.",
+        "payment_value": "amount for this payment installment - sums to order total, not per-item revenue"
+      }
+    },
+    {
+      "name": "order_reviews",
+      "description": "Customer satisfaction score per order. 104,162 rows.",
+      "primary_key": "review_id",
+      "columns": {
+        "order_id": "FK -> orders.order_id",
+        "review_score": "1-5 rating"
+      }
+    },
+    {
+      "name": "sellers",
+      "description": "One row per seller/merchant. 3,095 rows.",
+      "primary_key": "seller_id",
+      "columns": {
+        "seller_id": "unique seller identifier",
+        "seller_state": "2-letter Brazilian state code"
+      }
+    },
+    {
+      "name": "geolocation",
+      "description": "Zip-prefix to lat/lng lookup. 1,000,163 rows. Rarely needed for KPI questions - only join if the user explicitly asks about mapping/distance.",
+      "primary_key": "geolocation_zip_code_prefix (not unique)",
+      "columns": {}
+    }
+  ],
+  "join_paths": {
+    "revenue_or_product_questions": "orders -> order_items -> products -> category_translation",
+    "location_questions": "orders -> customers (use customer_state)",
+    "satisfaction_questions": "orders -> order_reviews"
+  },
+  "business_terms": {
+    "revenue": "SUM(order_items.price), NOT payment_value, and excludes freight_value",
+    "sales": "ambiguous - always clarify with the user whether they mean revenue (BRL) or units sold (COUNT) before running the query, same pattern as the client's own demo video",
+    "top performing products": "ranked by SUM(order_items.price) by default; offer units-sold as an alternate ranking",
+    "cancelled/invalid orders": "exclude order_status IN ('canceled', 'unavailable') from all revenue and product KPIs"
+  }
+}

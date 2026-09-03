@@ -152,4 +152,47 @@ change since all AI calls are contained in one function.
 Take the enriched plan from Step 3 and turn it into real, safely-executed SQL against
 the Databricks tables — this is where a query actually runs and returns a result table.
 
+**Status: COMPLETE. Full end-to-end pipeline working: question -> SQL -> safe execution -> real result.**
+
+### 4.1 What was built
+`ask_question.py` — the full pipeline in one script:
+- `generate_sql()` — sends the question + schema metadata to Claude Sonnet 5, gets back a real SQL SELECT statement (evolved from Step 3's "plan only" behavior)
+- `clean_sql()` — strips markdown code-fence formatting (```sql ... ```) that Claude sometimes wraps around generated queries
+- `is_safe_select()` — guardrail: only allows statements starting with SELECT, blocks INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/TRUNCATE/MERGE outright
+- `run_query()` — executes against the real Databricks SQL Warehouse using the databricks-sql-connector, with `schema="tgs_talk_to_data"` set explicitly on the connection
+
+### 4.2 Two real bugs hit and fixed during testing (good material for the final pitch)
+1. **Markdown-wrapped SQL**: Claude sometimes returns SQL wrapped in ```sql fences (chat-style
+   formatting). The safety check correctly rejected it as unrecognized rather than
+   silently failing — proving the guardrail works — but it also blocked genuinely valid
+   SQL. Fixed with `clean_sql()`, which strips the fences before the safety check runs.
+2. **Schema not found**: Claude generated `FROM orders` (no schema prefix), which is
+   reasonable on its own, but the Databricks connection defaulted to schema `default`
+   (empty) instead of our real schema `tgs_talk_to_data`. Fixed by explicitly passing
+   `schema="tgs_talk_to_data"` when opening the connection, so unqualified table names
+   resolve correctly.
+
+### 4.3 Validated end-to-end result
+Question: "What are the top 5 products by revenue?"
+- Generated SQL correctly joined order_items -> orders, filtered out cancelled/unavailable
+  orders (matching our documented business rule, unprompted), grouped and sorted correctly
+- Query executed successfully against the real 112,650-row order_items table
+- Returned 5 real products with real revenue figures (highest: R$63,885.00)
+
+### 4.4 Infrastructure added this step
+- Databricks SQL Warehouse (`talk-to-my-data-sql`, serverless, 2X-Small) created to allow
+  external connections from local Python code (separate from the notebook compute used
+  in Step 2)
+- Databricks personal access token generated, scoped narrowly to `sql` only (not full
+  account access)
+- New `.env` entries: DATABRICKS_SERVER_HOSTNAME, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN
+  (all confirmed protected by .gitignore, same as the Anthropic key)
+
+---
+
+## Next: Step 5 — Chat interface (Frontend/UX Engineer)
+Wrap `ask_question.py`'s pipeline in a simple chat-style UI so non-technical users can
+actually interact with it, matching the style of the demo video shown to TGS.
+
+
 

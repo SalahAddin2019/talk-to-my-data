@@ -194,5 +194,32 @@ Question: "What are the top 5 products by revenue?"
 Wrap `ask_question.py`'s pipeline in a simple chat-style UI so non-technical users can
 actually interact with it, matching the style of the demo video shown to TGS.
 
+**Status: COMPLETE. Working Streamlit chat app.**
+
+### 5.1 What was built
+`chat_app.py` — a Streamlit web app wrapping the exact same pipeline validated in Step 4
+(generate_sql -> clean_sql -> is_safe_select -> run_query), with no changes to the core
+logic. UI additions: a text input for the question, an "Ask" button, an expandable
+"See generated SQL" section for transparency, and a results table.
+
+### 5.2 Validated
+Ran locally via `streamlit run chat_app.py`. Tested with "what are the top 5 products by
+revenue?" — same correct results as the terminal version in Step 4, now presented as an
+actual usable web app rather than a script. This is the form factor a non-technical TGS
+sales user could realistically interact with, and matches the chat-style demo video shown
+to the client.
+
+### 5.3 Known limitation to mention in the pitch
+Product IDs display as raw hash strings rather than human-readable names, since the
+Olist dataset doesn't include product names (only categories). A real TGS rollout would
+show actual product names, since their catalog data would include them.
+
+---
+
+## Next: Step 6 — Deployment (DevOps Engineer)
+Currently the app only runs on localhost (one person's laptop). Deploy it to Azure so
+it's reachable as an actual URL, not just "works on my machine."
+
+
 
 

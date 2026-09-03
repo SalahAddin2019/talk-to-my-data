@@ -1,0 +1,155 @@
+# Talk-to-my-data — Running Project Log
+
+Case #1: Building a real-world Generative AI application for The Gadget Store (TGS) sales department.
+This document is updated after every step. It's meant to double as the backbone of the dry-run and final presentation.
+
+---
+
+## Step 1 — Dataset Selection & KPI Definition
+
+**Status:** Complete
+**Decision owner:** Team (Claude-assisted)
+
+### 1.1 Dataset chosen: Olist Brazilian E-Commerce Public Dataset
+
+Real, anonymised marketplace data: ~100,000 orders placed between 2016–2018, across multiple Brazilian marketplaces. Chosen over UCI Online Retail II and Tableau Superstore because it is **genuinely multi-table with real foreign-key relationships** — which is what actually exercises the hard part of the brief ("enhance the user's question with knowledge about the database tables").
+
+**Stated assumption (to say out loud in the pitch):** Olist is a single-country (Brazil) online marketplace with no physical stores. TGS is multi-country with 1,000+ physical stores. For this PoC we substitute `customer_state` (27 Brazilian states) as the location/"store" dimension the brief asks for ("over time, store, country, etc."). This is disclosed as a modelling choice, not hidden — the retrieval/enrichment approach transfers directly to TGS's real schema once they provide store-level data.
+
+### 1.2 Schema — 9 source tables
+
+| Table | Grain | Key columns |
+|---|---|---|
+| `olist_orders_dataset` | 1 row per order | `order_id` (PK), `customer_id` (FK), `order_status`, `order_purchase_timestamp`, `order_delivered_customer_date`, `order_estimated_delivery_date` |
+| `olist_customers_dataset` | 1 row per customer | `customer_id` (PK), `customer_unique_id`, `customer_city`, `customer_state` |
+| `olist_order_items_dataset` | 1 row per line item | `order_id` (FK), `order_item_id`, `product_id` (FK), `seller_id` (FK), `price`, `freight_value` |
+| `olist_products_dataset` | 1 row per product | `product_id` (PK), `product_category_name`, dimensions/weight |
+| `product_category_name_translation` | 1 row per category | `product_category_name` (PK), `product_category_name_english` |
+| `olist_order_payments_dataset` | 1+ rows per order | `order_id` (FK), `payment_sequential`, `payment_type`, `payment_installments`, `payment_value` |
+| `olist_order_reviews_dataset` | 1 row per review | `order_id` (FK), `review_score`, `review_comment_message` |
+| `olist_sellers_dataset` | 1 row per seller | `seller_id` (PK), `seller_city`, `seller_state` |
+| `olist_geolocation_dataset` | zip-prefix lookup | `geolocation_zip_code_prefix`, `lat`, `lng` |
+
+**Join path (orders as anchor):**
+`orders → customers (customer_id)` → `order_items (order_id)` → `products (product_id)` → `category_translation (product_category_name)` → `order_payments (order_id)` → `order_reviews (order_id)` → `sellers (seller_id)`
+
+This join path *is* the "table knowledge" the LLM needs to be given in Step 3 (schema enrichment) — we'll turn this table into structured metadata (table name, columns, join keys, one-line description) that gets injected into the prompt.
+
+**Confirmed decision:** Team reviewed whether to add a 3rd KPI (customer retention/CLV) to cover all three of the client's stated business goals, and decided to stay with the 2 locked KPIs below — satisfies the brief's "at least 2 KPIs" requirement. Customer retention/CLV noted as a "next phase" talking point for the final pitch's rollout advice, not built in this PoC.
+
+### 1.3 KPI definitions (locked in)
+
+**KPI 1 — Revenue Trend**
+- Definition: total revenue per period (month), using product `price` only (excludes freight — freight is a cost passed to the customer, not TGS revenue)
+- Formula: `SUM(order_items.price)` grouped by `DATE_TRUNC(orders.order_purchase_timestamp, MONTH)`
+- Only include orders with `order_status` not in `('canceled', 'unavailable')`
+- Supports slicing by: month, `customer_state`, `product_category_name_english`
+
+**KPI 2 — Top-Performing Products**
+- Definition: products ranked by total revenue over a selectable time window
+- Formula: `SUM(order_items.price)` grouped by `product_id` (or `product_category_name_english` for category-level rollups), ordered descending, top N
+- Same order-status filter as KPI 1
+- Secondary cut available: top products by *units sold* (`COUNT(order_items.order_item_id)`) — worth exposing since "top performing" can mean revenue or volume, and the demo video pattern (clarify before answering) applies here too
+
+### 1.4 Known data-quality notes (from prior public EDA of this dataset, to handle in Step 2 cleaning)
+- Some `product_category_name` values have no English translation (~2% of rows) — need a fallback ("Uncategorized") rather than dropping, since dropping loses revenue from those SKUs
+- `order_delivered_customer_date` is null for undelivered/cancelled orders — irrelevant to our two KPIs, no action needed yet
+- A single order can have multiple `payment_sequential` rows (installments) — must not double-count revenue; revenue lives in `order_items.price`, not `payments`, so this isn't a risk for KPI 1/2, but flagged for anyone touching payments data later
+
+### 1.5 Access note
+Downloading requires a Kaggle account (`kaggle.com/datasets/olistbr/brazilian-ecommerce`) — Data Engineer to pull the 9 CSVs and get them into the shared cloud storage / BigQuery in Step 2.
+
+---
+
+## Step 2 — Schema Setup & Data Load
+
+**Status:** Complete — **superseded and rebuilt for Databricks/Azure** (see 2.4 below). Kept the original BigQuery version below for reference only; the team is not using GCP.
+
+### 2.1 Deliverables produced
+- `ddl.sql` — CREATE SCHEMA + CREATE TABLE statements for all 9 tables, with join relationships documented as comments
+- `load_data.sh` — `bq load` script to load the 9 downloaded CSVs into BigQuery in one pass
+- `table_metadata.json` — **this is the key artifact for Step 3.** A machine-readable description of every table, its columns, join paths, and business-term definitions (e.g. what "revenue" means, that "sales" is ambiguous and must be clarified). This gets injected into the LLM's prompt so it can enrich user questions with real schema knowledge — directly satisfying the client's requirement to "enhance the user's question with knowledge about the database tables."
+- `kpi_queries.sql` — hand-written, validated SQL for both locked KPIs (Revenue Trend, Top-Performing Products), plus location-sliced variants using `customer_state` as the store/country proxy
+
+### 2.2 Action required from the Data Engineer (cannot be done in this environment — no live GCP/internet access here)
+1. Create a GCP project and enable BigQuery
+2. Download the 9 CSVs from Kaggle (`olistbr/brazilian-ecommerce`)
+3. Run `ddl.sql` (replace `PROJECT_ID` placeholder)
+4. Run `PROJECT_ID=<your-project> ./load_data.sh /path/to/csvs`
+5. Sanity-check row counts, then run `kpi_queries.sql` and manually verify a couple of numbers against a pandas groupby — this is the KPI-correctness validation the Data Engineer owns per the team plan
+
+### 2.3 Notes / decisions made
+- Declared `NOT IN ('canceled', 'unavailable')` as the standard order-status filter for both KPIs — this needs to be applied consistently everywhere revenue is calculated, including later in the LLM-generated SQL, or the numbers won't match the validated baseline
+- `order_payments.payment_value` is explicitly called out in the metadata as **not** the source of truth for revenue (it can double-count across installments) — `order_items.price` is
+
+### 2.4 Databricks/Azure version (current — use this one)
+
+**Why the switch:** team confirmed the actual stack is Databricks + Azure, not GCP/BigQuery. Dataset, schema, join paths, and KPI logic are all unchanged — only the storage/compute layer changed.
+
+**Deliverables:**
+- `00_setup_guide.md` — how to get the 9 CSVs into Databricks (Unity Catalog Volume upload for a fast start, or Azure Blob/ADLS + service principal for a more "production" story later)
+- `load_data_databricks.py` — PySpark notebook that reads each CSV with an explicit typed schema and writes it as a managed Delta table under the `tgs_talk_to_data` schema
+- `kpi_queries_databricks.sql` — same two KPIs, adjusted to Databricks SQL syntax (`date_trunc('MONTH', ...)`, no project-id prefix, just `schema.table`)
+- `table_metadata.json` — unchanged in substance (it was always platform-agnostic), just reworded to reference Databricks/Delta instead of BigQuery
+
+**Action required from the Data Engineer:**
+1. Get an Azure Databricks workspace running (Premium tier if Unity Catalog is available)
+2. Download the 9 CSVs from Kaggle, upload to a Unity Catalog Volume (fastest path — see setup guide for the Azure Blob alternative)
+3. Run `load_data_databricks.py` as a notebook, updating `BASE_PATH` to match
+4. Run `kpi_queries_databricks.sql` and manually validate a couple of numbers against a pandas baseline (KPI-correctness check, same as before)
+
+---
+
+## Next: Step 3 — Schema-aware question enrichment (AI/LLM Engineer)
+Build the prompt that takes `table_metadata.json` + the user's question and produces either (a) a clarifying question, or (b) an enriched, schema-grounded description of what to query — before any SQL is generated.
+
+**Status: Core logic built and validated with Claude Sonnet 5.**
+
+### 3.1 What was built
+`enrich_question.py` — loads `table_metadata.json`, builds a system prompt instructing
+Claude to either ask a clarifying question (if the request is ambiguous) or produce a
+structured plan (tables/joins/filters) if it's clear. Deliberately does NOT generate
+SQL yet — that's Step 4, kept as a separate concern so each piece can be tested in
+isolation.
+
+### 3.2 Validation — two test cases, opposite expected behaviors
+
+**Test 1 (ambiguous): "What were our total sales last month?"**
+Result: Correctly refused to guess. Asked to clarify (a) revenue vs. units sold for
+"sales", and (b) which "last month" reference point, given this is historical data
+rather than live data. Matches the clarification pattern shown in the client's own
+demo video.
+
+**Test 2 (unambiguous): "What are the top 5 products by revenue?"**
+Result: Correctly proceeded without asking anything. Produced a specific, accurate plan:
+- Tables: orders, order_items, products (+ category_translation as optional)
+- Join path: orders -> order_items (order_id) -> products (product_id)
+- Filter: excludes order_status IN ('canceled', 'unavailable') — applied automatically,
+  matching our documented business rule, without being told to in the question
+- Calculation: SUM(order_items.price) grouped by product_id, correctly matching our
+  KPI 2 definition from Step 1
+
+This is real evidence the system distinguishes ambiguous vs. clear questions rather
+than defaulting to one behavior — a stronger result than the minimum bar.
+
+### 3.3 Bug fixed along the way (worth documenting for the final pitch)
+Claude Sonnet 5 can return multiple content blocks per response (e.g. a "thinking"
+block plus a "text" block). Original code assumed a single block at index [0], which
+crashed on `AttributeError: 'ThinkingBlock' object has no attribute 'text'` the first
+time Sonnet actually used extended thinking. Fixed by looping through all returned
+blocks and extracting specifically the one with `type == "text"`.
+
+### 3.4 Provider note
+Using Anthropic (Claude Sonnet 5) directly rather than Azure OpenAI. Azure OpenAI
+requires a manual approval process (7-10 days, often rejects student/trial subscriptions)
+which was incompatible with the project timeline. Submitted the Azure OpenAI request
+in parallel in case it's approved later — swapping providers is a small, isolated
+change since all AI calls are contained in one function.
+
+---
+
+## Next: Step 4 — SQL generation & execution (Backend Engineer)
+Take the enriched plan from Step 3 and turn it into real, safely-executed SQL against
+the Databricks tables — this is where a query actually runs and returns a result table.
+
+

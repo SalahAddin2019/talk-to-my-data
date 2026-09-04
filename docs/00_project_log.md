@@ -317,6 +317,40 @@ headers (SP state-performance question), and three single-value results displaye
 blank in the exported test doc - unclear yet whether that's a real query bug or a
 copy-paste artifact. Needs rechecking directly in the live app with the rebuilt code.
 
+---
+
+## Step 8 — Second deployment: Streamlit Community Cloud (public, password-gated access)
+
+**Why:** Databricks Apps requires every viewer to authenticate via Microsoft Entra ID -
+fine for teammates/mentors added as guest users, but not workable for casually sharing
+a link with someone outside the org (e.g. the project owner) without an invite step.
+
+**Status: COMPLETE. Live at a public streamlit.app URL, gated by username/password.**
+
+### 8.1 What changed for this deployment
+- Added `get_secret()` helper: reads from Streamlit Cloud's secrets manager if present,
+  falls back to local `.env` - same file works locally and once deployed
+- Added a simple login screen (`check_login()`) - session-based, checks against
+  APP_USERNAME/APP_PASSWORD stored as Streamlit secrets. Not enterprise-grade security,
+  but sufficient for controlled sharing with a small number of people.
+- Reverted the Databricks connection from the service-principal method (Step 6, only
+  available inside Databricks Apps) back to an explicit personal access token - a new,
+  narrowly-scoped (`sql` only) token generated specifically for this deployment.
+- Added a root-level `requirements.txt` (streamlit, anthropic, databricks-sql-connector,
+  python-dotenv) since Streamlit Cloud needs one at the same level as the entrypoint file.
+
+### 8.2 Repository stays private
+Confirmed Streamlit Community Cloud supports deploying from private GitHub repos - no
+need to make the repo public. Required granting Streamlit's GitHub OAuth app additional
+permission for private-repo access (separate from the default public-repo grant).
+
+### 8.3 Result
+Two live, working deployments now exist for different audiences:
+- **Databricks Apps** - for the team/mentors, via guest Entra ID access
+- **Streamlit Community Cloud** - for casual/external sharing (e.g. project owner),
+  via a direct link + username/password, no Azure account needed
+
+
 
 
 

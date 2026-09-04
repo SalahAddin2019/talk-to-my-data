@@ -57,46 +57,31 @@ This join path *is* the "table knowledge" the LLM needs to be given in Step 3 (s
 - A single order can have multiple `payment_sequential` rows (installments) — must not double-count revenue; revenue lives in `order_items.price`, not `payments`, so this isn't a risk for KPI 1/2, but flagged for anyone touching payments data later
 
 ### 1.5 Access note
-Downloading requires a Kaggle account (`kaggle.com/datasets/olistbr/brazilian-ecommerce`) — Data Engineer to pull the 9 CSVs and get them into the shared cloud storage / BigQuery in Step 2.
+Downloading requires a Kaggle account (`kaggle.com/datasets/olistbr/brazilian-ecommerce`) — Data Engineer to pull the 9 CSVs and get them into Databricks in Step 2.
 
 ---
 
 ## Step 2 — Schema Setup & Data Load
 
-**Status:** Complete — **superseded and rebuilt for Databricks/Azure** (see 2.4 below). Kept the original BigQuery version below for reference only; the team is not using GCP.
+**Status:** Complete.
+
+**Correction (this section previously referenced Google BigQuery as the target platform — that was an early planning assumption, superseded before any actual implementation began, since the team's real stack is Databricks/Azure. No BigQuery project, table, or script was ever created or run. Removed below to avoid documenting infrastructure that doesn't exist.)**
 
 ### 2.1 Deliverables produced
-- `ddl.sql` — CREATE SCHEMA + CREATE TABLE statements for all 9 tables, with join relationships documented as comments
-- `load_data.sh` — `bq load` script to load the 9 downloaded CSVs into BigQuery in one pass
+- `00_setup_guide.md` — how to get the 9 CSVs into Databricks (Unity Catalog Volume upload for a fast start, or Azure Blob/ADLS + service principal for a more "production" story later)
+- `load_data_databricks.py` — PySpark notebook that reads each CSV with an explicit typed schema and writes it as a managed Delta table under the `tgs_talk_to_data` schema
+- `kpi_queries_databricks.sql` — validated SQL for both locked KPIs (Revenue Trend, Top-Performing Products) in Databricks SQL syntax, plus a location-sliced variant using `customer_state` as the store/country proxy
 - `table_metadata.json` — **this is the key artifact for Step 3.** A machine-readable description of every table, its columns, join paths, and business-term definitions (e.g. what "revenue" means, that "sales" is ambiguous and must be clarified). This gets injected into the LLM's prompt so it can enrich user questions with real schema knowledge — directly satisfying the client's requirement to "enhance the user's question with knowledge about the database tables."
-- `kpi_queries.sql` — hand-written, validated SQL for both locked KPIs (Revenue Trend, Top-Performing Products), plus location-sliced variants using `customer_state` as the store/country proxy
 
-### 2.2 Action required from the Data Engineer (cannot be done in this environment — no live GCP/internet access here)
-1. Create a GCP project and enable BigQuery
-2. Download the 9 CSVs from Kaggle (`olistbr/brazilian-ecommerce`)
-3. Run `ddl.sql` (replace `PROJECT_ID` placeholder)
-4. Run `PROJECT_ID=<your-project> ./load_data.sh /path/to/csvs`
-5. Sanity-check row counts, then run `kpi_queries.sql` and manually verify a couple of numbers against a pandas groupby — this is the KPI-correctness validation the Data Engineer owns per the team plan
+### 2.2 What was actually done
+1. Azure Databricks workspace created (Premium tier, for Unity Catalog)
+2. 9 CSVs downloaded from Kaggle and uploaded to a Unity Catalog Volume
+3. `load_data_databricks.py` run as a notebook — all 9 tables loaded successfully, row counts matched public documentation (e.g. 99,441 orders)
+4. `kpi_queries_databricks.sql` run and manually cross-checked against expected values — KPI-correctness validation, owned by the Data Engineer per the team plan
 
 ### 2.3 Notes / decisions made
 - Declared `NOT IN ('canceled', 'unavailable')` as the standard order-status filter for both KPIs — this needs to be applied consistently everywhere revenue is calculated, including later in the LLM-generated SQL, or the numbers won't match the validated baseline
 - `order_payments.payment_value` is explicitly called out in the metadata as **not** the source of truth for revenue (it can double-count across installments) — `order_items.price` is
-
-### 2.4 Databricks/Azure version (current — use this one)
-
-**Why the switch:** team confirmed the actual stack is Databricks + Azure, not GCP/BigQuery. Dataset, schema, join paths, and KPI logic are all unchanged — only the storage/compute layer changed.
-
-**Deliverables:**
-- `00_setup_guide.md` — how to get the 9 CSVs into Databricks (Unity Catalog Volume upload for a fast start, or Azure Blob/ADLS + service principal for a more "production" story later)
-- `load_data_databricks.py` — PySpark notebook that reads each CSV with an explicit typed schema and writes it as a managed Delta table under the `tgs_talk_to_data` schema
-- `kpi_queries_databricks.sql` — same two KPIs, adjusted to Databricks SQL syntax (`date_trunc('MONTH', ...)`, no project-id prefix, just `schema.table`)
-- `table_metadata.json` — unchanged in substance (it was always platform-agnostic), just reworded to reference Databricks/Delta instead of BigQuery
-
-**Action required from the Data Engineer:**
-1. Get an Azure Databricks workspace running (Premium tier if Unity Catalog is available)
-2. Download the 9 CSVs from Kaggle, upload to a Unity Catalog Volume (fastest path — see setup guide for the Azure Blob alternative)
-3. Run `load_data_databricks.py` as a notebook, updating `BASE_PATH` to match
-4. Run `kpi_queries_databricks.sql` and manually validate a couple of numbers against a pandas baseline (KPI-correctness check, same as before)
 
 ---
 

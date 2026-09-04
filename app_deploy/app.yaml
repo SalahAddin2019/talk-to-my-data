@@ -1,0 +1,10 @@
+command: ['streamlit', 'run', 'app.py']
+env:
+  - name: 'ANTHROPIC_API_KEY'
+    valueFrom: 'anthropic_key'
+  - name: 'DATABRICKS_SERVER_HOSTNAME'
+    value: 'adb-7405619726190413.13.azuredatabricks.net'
+  - name: 'DATABRICKS_HTTP_PATH'
+    value: '/sql/1.0/warehouses/a3018fa8c8cb791d'
+  - name: 'DATABRICKS_WAREHOUSE_ID'
+    valueFrom: 'warehouse'

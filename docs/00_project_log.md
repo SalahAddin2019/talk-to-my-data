@@ -220,6 +220,54 @@ show actual product names, since their catalog data would include them.
 Currently the app only runs on localhost (one person's laptop). Deploy it to Azure so
 it's reachable as an actual URL, not just "works on my machine."
 
+**Status: COMPLETE. Live at a public Databricks Apps URL.**
+
+### 6.1 Platform decision
+Chose Databricks Apps over Azure App Service — keeps everything in one platform,
+avoids standing up separate Azure infrastructure, and is explicitly listed as an
+acceptable deployment target in the client's own brief.
+
+### 6.2 What was built
+- `app_deploy/` — a minimal, clean deployment package containing only what the running
+  app needs: `app.py`, `app.yaml`, `requirements.txt`, `docs/table_metadata.json`
+  (deliberately excludes docs/notebooks meant for humans, not the app)
+- Databricks CLI installed and authenticated (needed broader token scopes than the
+  SQL-only token from Step 4: apps + secrets + workspace)
+- A dedicated secret scope (`talk-to-my-data-secrets`) storing the Anthropic API key,
+  referenced securely via `app.yaml`'s `valueFrom` field rather than any plaintext file
+- SQL Warehouse and schema permissions granted to the app's own service principal
+  (separate identity from the developer's personal login)
+
+### 6.3 Real debugging done during deployment (good material for the final pitch —
+shows the gap between "works on my laptop" and "works as a real deployed service")
+
+1. **Two competing auth methods**: initially tried connecting via a manually-passed
+   personal access token (same method as local dev). Databricks Apps have their own
+   built-in service-principal identity, auto-injected as DATABRICKS_CLIENT_ID/SECRET.
+   Having both a token AND client credentials present caused the SDK to refuse to guess
+   which to use ("more than one authorization method configured"). Fixed by switching
+   fully to the service-principal method (via databricks-sdk's Config()) and removing
+   the redundant personal token from app.yaml.
+2. **Schema not found (again)**: the same schema-defaulting issue from Step 4 resurfaced
+   after rewriting the connection logic for the new auth method - the schema="tgs_talk_to_data"
+   parameter was dropped during the rewrite and had to be re-added.
+3. **Insufficient permissions**: the app's service principal is a genuinely separate
+   identity from the developer's own login, with zero inherited access. Had to explicitly
+   grant USE SCHEMA and SELECT on tgs_talk_to_my_data.tgs_talk_to_data to the app's
+   service principal via Unity Catalog permissions - a real, expected step when deploying
+   with a dedicated app identity rather than a personal account.
+
+### 6.4 Known limitation to mention in the pitch
+Product IDs display as raw hash strings rather than human-readable names (inherited
+from Step 5 - Olist dataset limitation, not a deployment issue).
+
+---
+
+## Project status: core technical build complete
+Environment -> data -> KPIs -> AI reasoning -> SQL execution -> chat UI -> live deployment,
+all working end-to-end. Remaining work is packaging this into the dry-run and final
+presentation decks, not further technical build.
+
 
 
 

@@ -268,6 +268,55 @@ Environment -> data -> KPIs -> AI reasoning -> SQL execution -> chat UI -> live 
 all working end-to-end. Remaining work is packaging this into the dry-run and final
 presentation decks, not further technical build.
 
+---
+
+## Step 7 — Post-deployment refinement (found during real user testing)
+
+After deployment, ran a 10-question test set (5 deliberately ambiguous, 5 deliberately
+clear) and found real gaps between the intended behavior and what was actually deployed.
+Fixed each one in turn:
+
+### 7.1 Bug: ambiguous questions were never actually being clarified
+Root cause: `SQL_SYSTEM_PROMPT` (used in the deployed app since Step 4) explicitly told
+the model to "make a reasonable default choice rather than asking a question" - a
+deliberate Step 4 decision to guarantee runnable SQL, which directly contradicted the
+clarification behavior we validated separately in Step 3's `enrich_question.py`. That
+script was never actually wired into the deployed app.
+Fix: rebuilt the app around a proper two-stage flow - a classification step runs first
+and can stop the flow entirely with a clarifying question; SQL generation only runs on
+messages already confirmed clear.
+
+### 7.2 Bug: no way to answer a clarifying question
+The first two-stage version asked clarifying questions but had no UI to answer them -
+the input box only ever started a new question. Fixed with `st.session_state` to track
+a pending clarification and a follow-up answer box.
+
+### 7.3 UX change: rebuilt as a real chat interface
+Replaced the button-and-textbox UI with Streamlit's native `st.chat_message` /
+`st.chat_input` - full conversation shown as chat bubbles, input fixed at the bottom.
+
+### 7.4 Bug: no conversation memory (follow-ups like "what about the other choice" failed)
+Every model call had been stateless - only the latest message was ever sent, with zero
+context. Fixed by maintaining a running `api_history` (plain role/content list) sent in
+full on every single classify/generate call, so the model can resolve references back
+to earlier turns. Assistant replies are summarized (including a preview of actual result
+rows) back into history so later questions can reference real numbers, not just row counts.
+
+### 7.5 Bug: casual messages ("thank you") were forced through SQL generation and failed
+The original two-way check (ambiguous vs. clear) assumed every message was a data
+question. Upgraded to a three-way classifier: CHAT (small talk / thanks / meta questions,
+answered directly, no SQL) / CLARIFY / CLEAR.
+
+### 7.6 Feature: "New chat" button
+Added a sidebar button that resets both the display history and the API history,
+starting a genuinely fresh conversation.
+
+### 7.7 Known issues still to verify
+From the original 10-question test: one result table showed garbled/duplicated column
+headers (SP state-performance question), and three single-value results displayed
+blank in the exported test doc - unclear yet whether that's a real query bug or a
+copy-paste artifact. Needs rechecking directly in the live app with the rebuilt code.
+
 
 
 

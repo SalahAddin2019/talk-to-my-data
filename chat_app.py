@@ -4,15 +4,46 @@ import streamlit as st
 from dotenv import load_dotenv
 from anthropic import Anthropic
 from databricks import sql
-from databricks.sdk.core import Config
 
 load_dotenv()
 
-anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-cfg = Config()  # reads DATABRICKS_HOST / CLIENT_ID / CLIENT_SECRET, auto-injected by Databricks Apps
+
+def get_secret(name: str) -> str:
+    """Reads from Streamlit Cloud's secrets manager if available, otherwise
+    falls back to a local .env file - so this same file works both locally
+    and once deployed."""
+    if name in st.secrets:
+        return st.secrets[name]
+    return os.getenv(name)
+
+
+anthropic_client = Anthropic(api_key=get_secret("ANTHROPIC_API_KEY"))
 
 with open("docs/table_metadata.json", "r") as f:
     schema = json.load(f)
+
+# ---- Simple username/password gate ----
+
+
+def check_login():
+    if st.session_state.get("authenticated"):
+        return True
+
+    st.title("\U0001F4AC Talk to my data")
+    st.caption("Please log in to continue.")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Log in"):
+        if username == get_secret("APP_USERNAME") and password == get_secret("APP_PASSWORD"):
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect username or password.")
+    return False
+
+
+if not check_login():
+    st.stop()
 
 # ---- Stage 1: classify the LATEST message into one of three categories ----
 
@@ -110,10 +141,10 @@ def is_safe_select(sql_text: str) -> bool:
 
 def run_query(sql_text: str):
     with sql.connect(
-        server_hostname=cfg.host,
-        http_path=f"/sql/1.0/warehouses/{os.getenv('DATABRICKS_WAREHOUSE_ID')}",
-        credentials_provider=lambda: cfg.authenticate,
-        schema="tgs_talk_to_data"
+        server_hostname=get_secret("DATABRICKS_SERVER_HOSTNAME"),
+        http_path=get_secret("DATABRICKS_HTTP_PATH"),
+        access_token=get_secret("DATABRICKS_TOKEN"),
+        schema="tgs_talk_to_data",
     ) as connection:
         with connection.cursor() as cursor:
             cursor.execute(sql_text)
@@ -177,6 +208,9 @@ with st.sidebar:
     if st.button("+ New chat", use_container_width=True):
         st.session_state.messages = []
         st.session_state.api_history = []
+        st.rerun()
+    if st.button("Log out", use_container_width=True):
+        st.session_state.authenticated = False
         st.rerun()
 
 st.title("\U0001F4AC Talk to my data")
